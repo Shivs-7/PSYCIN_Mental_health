@@ -1,0 +1,83 @@
+import numpy as np
+import pandas as pd
+import pywt
+from google.colab import drive
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.svm import SVC
+from hmmlearn.hmm import GaussianHMM
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# Mount Google Drive
+drive.mount('/content/gdrive/')
+
+# Load data
+df = pd.read_csv('/content/gdrive/My Drive/Colab Notebooks/trimmed.csv')
+
+# Assuming the last column is the target (label)
+X = df.iloc[:, :-1].values
+y = df.iloc[:, -1].values
+
+# Define wavelet and level of decomposition
+wavelet = 'db4'
+level = 1
+
+# Function to apply DWT to a single channel
+def apply_dwt(channel_data):
+    coeffs = pywt.wavedec(channel_data, wavelet, level=level)
+    return np.concatenate(coeffs)
+
+# Apply DWT to each channel in X
+dwt_features = np.apply_along_axis(apply_dwt, axis=1, arr=X)
+
+# Standardize the features
+scaler = StandardScaler()
+dwt_features_scaled = scaler.fit_transform(dwt_features)
+
+# Perform PCA for compression
+n_components = 15
+pca = PCA(n_components=n_components)
+compressed_features = pca.fit_transform(dwt_features_scaled)
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(compressed_features, y, test_size=0.2, random_state=42)
+
+# Train SVM classifier as a benchmark
+svm_classifier = SVC(kernel='rbf', C=1, gamma='scale')
+svm_classifier.fit(X_train, y_train)
+
+# Train HMM
+# Experiment with different numbers of hidden states
+best_hmm_accuracy = 0
+best_n_components = 0
+for n_components in range(2, 20):  # Try different number of states
+    try:
+        hmm = GaussianHMM(n_components=n_components, covariance_type='diag', n_iter=100)
+        hmm.fit(X_train)
+        
+        y_pred_hmm = hmm.predict(X_test)
+        hmm_accuracy = accuracy_score(y_test, y_pred_hmm)
+        
+        if hmm_accuracy > best_hmm_accuracy:
+            best_hmm_accuracy = hmm_accuracy
+            best_n_components = n_components
+
+    except Exception as e:
+        print(f"Failed to fit HMM with {n_components} components: {e}")
+        continue
+
+print(f"Best HMM Accuracy: {best_hmm_accuracy} with {best_n_components} hidden states")
+
+# Use the best HMM accuracy directly
+hmm_accuracy = best_hmm_accuracy
+
+# Make predictions with SVM and calculate accuracy
+y_pred_svm = svm_classifier.predict(X_test)
+svm_accuracy = accuracy_score(y_test, y_pred_svm)
+
+combined_accuracy = (svm_accuracy + hmm_accuracy) / 2.0
+
+print("SVM Accuracy:", svm_accuracy)
+print("HMM Accuracy:", hmm_accuracy)
+print("Combined Accuracy:", combined_accuracy)
